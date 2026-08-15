@@ -1,6 +1,5 @@
 package com.chayu.volumecontrol
 
-import android.content.SharedPreferences
 import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
@@ -9,7 +8,6 @@ import android.net.ConnectivityManager
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
@@ -104,28 +102,6 @@ private data class RingTuning(
     val springStiffness: Float = 443.87097f,
 )
 
-private fun SharedPreferences.readRingTuning(): RingTuning {
-    return RingTuning(
-        thickness = getFloat("thickness", 17.522581f),
-        waveAmplitude = getFloat("wave_amplitude", 0.39892474f).coerceIn(0f, 1f),
-        waveWavelength = getFloat("wave_wavelength", 38.670967f).coerceIn(12f, 48f),
-        waveSpeed = getFloat("wave_speed", 10.806452f).coerceIn(2f, 32f),
-        springDamping = getFloat("spring_damping", 0.7583871f),
-        springStiffness = getFloat("spring_stiffness", 443.87097f),
-    )
-}
-
-private fun SharedPreferences.saveRingTuning(tuning: RingTuning) {
-    edit()
-        .putFloat("thickness", tuning.thickness)
-        .putFloat("wave_amplitude", tuning.waveAmplitude)
-        .putFloat("wave_wavelength", tuning.waveWavelength)
-        .putFloat("wave_speed", tuning.waveSpeed)
-        .putFloat("spring_damping", tuning.springDamping)
-        .putFloat("spring_stiffness", tuning.springStiffness)
-        .apply()
-}
-
 private data class ActiveMedia(
     val packageName: String,
     val title: String,
@@ -209,7 +185,6 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     },
-                    readCurrentVolume = { readCurrentVolume() },
                     onVolumeUp = {
                         audioManager.adjustStreamVolume(
                             AudioManager.STREAM_MUSIC,
@@ -346,7 +321,6 @@ private fun VolumeControlScreen(
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
     onSeek: (Float) -> Unit,
-    readCurrentVolume: () -> Int,
     onVolumeUp: () -> Unit,
     onVolumeDown: () -> Unit,
     onMute: () -> Unit,
@@ -354,14 +328,8 @@ private fun VolumeControlScreen(
 ) {
     val targetProgress = if (maximumVolume > 0) currentVolume.toFloat() / maximumVolume else 0f
     val context = LocalContext.current
-    val tuningPreferences = remember {
-        context.getSharedPreferences("ring_tuning", android.content.Context.MODE_PRIVATE)
-    }
     val localIpAddress = remember { readLocalIpAddress(context) }
-    var tuning by remember { mutableStateOf(tuningPreferences.readRingTuning()) }
-    var tuningPageVisible by remember { mutableStateOf(false) }
-    var draftTuning by remember { mutableStateOf(tuning) }
-    var previewVolume by remember { mutableIntStateOf(currentVolume) }
+    val tuning = remember { RingTuning() }
     val animatedProgress by animateFloatAsState(
         targetValue = targetProgress,
         animationSpec = spring(
@@ -416,7 +384,6 @@ private fun VolumeControlScreen(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 FilledTonalButton(
                     onClick = onMute,
@@ -424,17 +391,6 @@ private fun VolumeControlScreen(
                     shape = MaterialTheme.shapes.extraLarge,
                 ) {
                     Text("静音")
-                }
-                FilledTonalButton(
-                    onClick = {
-                        draftTuning = tuning
-                        previewVolume = readCurrentVolume().coerceIn(0, maximumVolume)
-                        tuningPageVisible = true
-                    },
-                    modifier = Modifier.weight(1f),
-                    shape = MaterialTheme.shapes.extraLarge,
-                ) {
-                    Text("调节音量环")
                 }
             }
 
@@ -462,25 +418,6 @@ private fun VolumeControlScreen(
             textAlign = TextAlign.Center,
         )
 
-        if (tuningPageVisible) {
-            BackHandler {
-                tuningPageVisible = false
-            }
-            RingTuningScreen(
-                previewVolume = previewVolume,
-                maximumVolume = maximumVolume,
-                tuning = draftTuning,
-                onTuningChange = { draftTuning = it },
-                onReset = { draftTuning = RingTuning() },
-                onPreviewVolumeChange = { previewVolume = it.coerceIn(0, maximumVolume) },
-                onCancel = { tuningPageVisible = false },
-                onComplete = {
-                    tuning = draftTuning
-                    tuningPreferences.saveRingTuning(draftTuning)
-                    tuningPageVisible = false
-                },
-            )
-        }
     }
 }
 
@@ -798,117 +735,6 @@ private fun VolumeRingPreview(
 }
 
 @Composable
-private fun RingTuningScreen(
-    previewVolume: Int,
-    maximumVolume: Int,
-    tuning: RingTuning,
-    onTuningChange: (RingTuning) -> Unit,
-    onReset: () -> Unit,
-    onPreviewVolumeChange: (Int) -> Unit,
-    onCancel: () -> Unit,
-    onComplete: () -> Unit,
-) {
-    val previewProgress = if (maximumVolume > 0) {
-        previewVolume.toFloat() / maximumVolume
-    } else 0f
-    val animatedPreviewProgress by animateFloatAsState(
-        targetValue = previewProgress,
-        animationSpec = spring(
-            dampingRatio = tuning.springDamping,
-            stiffness = tuning.springStiffness,
-        ),
-        label = "previewVolumeProgress",
-    )
-
-    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text("音量环调参", style = MaterialTheme.typography.titleLarge)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(246.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                PreviewVolumeButton(
-                    label = "−",
-                    onClick = { onPreviewVolumeChange(previewVolume - 1) },
-                    modifier = Modifier.align(Alignment.CenterStart),
-                )
-                VolumeRingPreview(
-                    currentVolume = previewVolume,
-                    targetProgress = previewProgress,
-                    animatedProgress = animatedPreviewProgress,
-                    tuning = tuning,
-                    maximumVolume = maximumVolume,
-                    onVolumeChange = onPreviewVolumeChange,
-                    modifier = Modifier.size(210.dp),
-                )
-                PreviewVolumeButton(
-                    label = "+",
-                    onClick = { onPreviewVolumeChange(previewVolume + 1) },
-                    modifier = Modifier.align(Alignment.CenterEnd),
-                )
-            }
-
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                TuningSlider("Ring Thickness", tuning.thickness, 8f..32f, "%.0f dp") {
-                    onTuningChange(tuning.copy(thickness = it))
-                }
-                TuningSlider(
-                    label = "Wave Strength",
-                    value = tuning.waveAmplitude,
-                    range = 0f..1f,
-                    valueFormat = "%.0f%%",
-                    valueMultiplier = 100f,
-                ) {
-                    onTuningChange(tuning.copy(waveAmplitude = it))
-                }
-                TuningSlider("Wave Wavelength", tuning.waveWavelength, 12f..48f, "%.0f dp") {
-                    onTuningChange(tuning.copy(waveWavelength = it))
-                }
-                TuningSlider("Wave Speed", tuning.waveSpeed, 2f..32f, "%.0f dp/s") {
-                    onTuningChange(tuning.copy(waveSpeed = it))
-                }
-                TuningSlider("Progress Damping", tuning.springDamping, 0.3f..1f, "%.2f") {
-                    onTuningChange(tuning.copy(springDamping = it))
-                }
-                TuningSlider("Progress Stiffness", tuning.springStiffness, 100f..700f, "%.0f") {
-                    onTuningChange(tuning.copy(springStiffness = it))
-                }
-                FilledTonalButton(onClick = onReset, modifier = Modifier.fillMaxWidth()) {
-                    Text("Reset")
-                }
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                FilledTonalButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
-                    Text("取消")
-                }
-                Button(onClick = onComplete, modifier = Modifier.weight(1f)) {
-                    Text("保存")
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun PreviewVolumeButton(
     label: String,
     onClick: () -> Unit,
@@ -926,24 +752,6 @@ private fun PreviewVolumeButton(
             lineHeight = 28.sp,
             textAlign = TextAlign.Center,
         )
-    }
-}
-
-@Composable
-private fun TuningSlider(
-    label: String,
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    valueFormat: String,
-    valueMultiplier: Float = 1f,
-    onValueChange: (Float) -> Unit,
-) {
-    Column {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(label, style = MaterialTheme.typography.labelLarge)
-            Text(valueFormat.format(value * valueMultiplier), color = MaterialTheme.colorScheme.primary)
-        }
-        Slider(value = value, onValueChange = onValueChange, valueRange = range)
     }
 }
 
