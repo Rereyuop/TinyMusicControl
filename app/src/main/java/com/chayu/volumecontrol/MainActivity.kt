@@ -5,7 +5,11 @@ import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -51,6 +55,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -128,6 +133,48 @@ private fun readLocalIpAddress(context: android.content.Context): String {
     } catch (_: Exception) {
         return "未连接网络"
     }
+}
+
+@Composable
+private fun rememberLocalIpAddress(context: android.content.Context): String {
+    var localIpAddress by remember(context) { mutableStateOf(readLocalIpAddress(context)) }
+
+    DisposableEffect(context) {
+        val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
+        val mainHandler = Handler(Looper.getMainLooper())
+        val refreshAddress: () -> Unit = {
+            mainHandler.post {
+                localIpAddress = readLocalIpAddress(context)
+            }
+            Unit
+        }
+        val networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = refreshAddress()
+
+            override fun onLost(network: Network) = refreshAddress()
+
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) =
+                refreshAddress()
+        }
+
+        try {
+            connectivityManager.registerDefaultNetworkCallback(networkCallback)
+            refreshAddress()
+        } catch (_: Exception) {
+            localIpAddress = "未连接网络"
+        }
+
+        onDispose {
+            mainHandler.removeCallbacksAndMessages(null)
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback)
+            } catch (_: Exception) {
+                // The callback may not have been registered when network services are unavailable.
+            }
+        }
+    }
+
+    return localIpAddress
 }
 
 class MainActivity : ComponentActivity() {
@@ -328,7 +375,7 @@ private fun VolumeControlScreen(
 ) {
     val targetProgress = if (maximumVolume > 0) currentVolume.toFloat() / maximumVolume else 0f
     val context = LocalContext.current
-    val localIpAddress = remember { readLocalIpAddress(context) }
+    val localIpAddress = rememberLocalIpAddress(context)
     val tuning = remember { RingTuning() }
     val animatedProgress by animateFloatAsState(
         targetValue = targetProgress,
@@ -368,7 +415,6 @@ private fun VolumeControlScreen(
                 )
                 VolumeRingPreview(
                     currentVolume = currentVolume,
-                    targetProgress = targetProgress,
                     animatedProgress = animatedProgress,
                     tuning = tuning,
                     maximumVolume = maximumVolume,
@@ -407,14 +453,22 @@ private fun VolumeControlScreen(
         }
 
         Text(
-            text = "本机 IP：$localIpAddress",
+            text = if (localIpAddress == "未连接网络") {
+                "网络已断开"
+            } else {
+                "本机 IP：$localIpAddress"
+            },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 8.dp),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+            color = if (localIpAddress == "未连接网络") {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+            },
             textAlign = TextAlign.Center,
         )
 
@@ -587,7 +641,6 @@ private fun formatDuration(milliseconds: Long): String {
 @Composable
 private fun VolumeRingPreview(
     currentVolume: Int,
-    targetProgress: Float,
     animatedProgress: Float,
     tuning: RingTuning,
     maximumVolume: Int = 0,
@@ -599,6 +652,14 @@ private fun VolumeRingPreview(
     val volumeChange = onVolumeChange
     val latestVolume = rememberUpdatedState(currentVolume)
     val latestVolumeChange = rememberUpdatedState(onVolumeChange)
+    var waveAmplitude by remember(tuning.waveAmplitude) { mutableFloatStateOf(0f) }
+    LaunchedEffect(tuning.waveAmplitude) {
+        // Material3 1.5.0-alpha01 does not create the circular morph when a fractional
+        // amplitude is present on the first draw. Start from zero, then apply the tuned
+        // amplitude after the initial frame so Android 7 can keep this dependency version.
+        delay(32L)
+        waveAmplitude = tuning.waveAmplitude
+    }
     val gestureModifier = if (volumeChange == null || maximumVolume <= 0) {
         Modifier
     } else {
@@ -672,10 +733,7 @@ private fun VolumeRingPreview(
             trackStroke = Stroke(
                 width = tuning.thickness.dp.value,
             ),
-            // Keep this lambda tied to tuning. Material3 refreshes the cached wave path when
-            // the amplitude provider changes; a remembered provider leaves that path stale
-            // after returning from the tuning screen.
-            amplitude = { _: Float -> tuning.waveAmplitude },
+            amplitude = { _: Float -> waveAmplitude },
             wavelength = wavelengthDp.dp,
             waveSpeed = tuning.waveSpeed.coerceAtLeast(2f).dp,
         )

@@ -8,6 +8,30 @@ android {
     namespace = "com.chayu.volumecontrol"
     compileSdk = 36
 
+    val releaseKeystoreFile = rootProject.file("release.jks")
+    val releasePasswordFile = rootProject.file(".release-signing-password")
+    val releaseSigningAvailable = releaseKeystoreFile.exists() && releasePasswordFile.exists()
+
+    signingConfigs {
+        if (releaseSigningAvailable) {
+            create("release") {
+                val releasePassword = releasePasswordFile.readText().trim()
+                storeFile = releaseKeystoreFile
+                storePassword = releasePassword
+                keyAlias = "utb"
+                keyPassword = releasePassword
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            if (releaseSigningAvailable) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -21,8 +45,8 @@ android {
         applicationId = "com.chayu.volumecontrol"
         minSdk = 24
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.0.11"
+        versionCode = 15
+        versionName = "0.0.15"
     }
 }
 
