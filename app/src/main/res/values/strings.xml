@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">VolumeControl</string>
+    <string name="volume_value">%1$d / %2$d</string>
+    <string name="volume_up">音量 +</string>
+    <string name="volume_down">音量 -</string>
+    <string name="mute">静音</string>
+    <string name="media_access_label">读取正在播放的媒体</string>
+</resources>
